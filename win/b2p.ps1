@@ -1,7 +1,7 @@
-# b2p.ps1 - v1.4.4
+# b2p.ps1 - v1.4.5
 param([String]$install, [String]$uninstall, [String]$upgrade, [String]$default, [String]$search, [String]$v = "latest", [Switch]$s = $false)
 
-$B2P_CLI_VERSION = "1.4.4"
+$B2P_CLI_VERSION = "1.4.5"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
@@ -52,7 +52,8 @@ function Show-Catalog {
         $idx = 0
         if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $apps.Count) {
             $selected = $apps[$idx - 1]
-            iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$selected/i.s") } -v latest"
+            $url = "$RAW_W/$selected/i.s"
+            iex "& { $(Invoke-RestMethod -Uri $url) } -v latest"
             Read-Host "`nPressione Enter para continuar..."
         }
     } catch { Write-Host "Erro de conexão." -ForegroundColor Red; Pause }
@@ -97,20 +98,18 @@ function Manage-Installed {
                 $alias = Read-Host "Nome do comando (ex: mclang)"
                 $exe = Read-Host "Executável (ex: bin\clang.exe)"
                 $verIn = Read-Host "Versão (padrão: latest)"
-                $vResolved = if ($verIn) { $verIn } else { "latest" }
-                $verReal = Resolve-B2PVersion -App $app -Ver $vResolved
+                $verReal = Resolve-B2PVersion -App $app -Ver (if ($verIn) { $verIn } else { "latest" })
                 $metaPath = Join-Path $B2P_APPS "$app\$verReal\b2p-metadata.json"
                 if (Test-Path $metaPath) {
                     $meta = Get-Content $metaPath | ConvertFrom-Json
                     $fullPath = Join-Path $meta.BinPath (Split-Path $exe -Leaf)
                     if (-not (Test-Path $fullPath)) { $fullPath = Join-Path $meta.BinPath $exe }
-                    Create-B2PShim -BinaryPath $fullPath -Alias $alias
+                    Create-B2PShim -BinaryPath $fullPath -Alias $alias -Version $verReal -AppName $app
                 }
             }
             "4" {
                 $verIn = Read-Host "Versão (padrão: latest)"
-                $vResolved = if ($verIn) { $verIn } else { "latest" }
-                $verReal = Resolve-B2PVersion -App $app -Ver $vResolved
+                $verReal = Resolve-B2PVersion -App $app -Ver (if ($verIn) { $verIn } else { "latest" })
                 $metaPath = Join-Path $B2P_APPS "$app\$verReal\b2p-metadata.json"
                 if (Test-Path $metaPath) {
                     $meta = Get-Content $metaPath | ConvertFrom-Json
@@ -191,7 +190,7 @@ function Setup-B2P-Self {
 
 if ($install) { 
     if ($install -eq "b2p") { Setup-B2P-Self } 
-    else { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$install/i.s") } -v '$v' $(if ($s){'-s'})" }
+    else { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$install/i.s") } -v '$v' $(if($s){'-s'})" }
     return 
 }
 if ($uninstall) {
