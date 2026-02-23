@@ -4,7 +4,7 @@ $B2P_CLI_VERSION = "1.5.0"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
-$RAW_B2P = "https://raw.githubusercontent.com/b2p-pw/b2p/main/win"
+$RAW_B2P = "https://raw.githubusercontent.com/b2p-pw/b2p/main/windows"
 $RAW_W   = "https://raw.githubusercontent.com/b2p-pw/windows-catalog/main"
 $API_W   = "https://api.github.com/repos/b2p-pw/windows-catalog/contents"
 
@@ -27,6 +27,7 @@ function Resolve-B2PVersion {
     if ($Ver -eq "latest" -and (Test-Path $appPath)) {
         $latest = Get-ChildItem $appPath -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
         if ($latest) { return $latest.Name }
+        Write-Host "[b2p] Warning: No versions found for $App. Using 'latest' as literal slot." -ForegroundColor Yellow
     }
     return $Ver
 }
@@ -57,7 +58,8 @@ function Show-Catalog {
         if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $apps.Count) {
             $selected = $apps[$idx - 1]
             $url = "$RAW_W/$selected/i.s"
-            iex "& { `$OriginUrl='$url'; $(Invoke-RestMethod -Uri $url) } -v latest"
+            Write-B2PAudit "Installing app from: $url"
+            Invoke-B2PRemoteScript -Uri $url -ArgumentList "-v latest"
             Read-Host "`nProcess finished. Press Enter..."
         }
     } catch { Write-Host "Connection error." -ForegroundColor Red; Pause }
@@ -65,59 +67,94 @@ function Show-Catalog {
 
 function Manage-Installed {
     Show-Header
-    if (-not (Test-Path $B2P_APPS)) { Write-Host "Nenhum app instalado." -ForegroundColor Yellow; Pause; return }
+    if (-not (Test-Path $B2P_APPS)) { Write-Host "No installed apps." -ForegroundColor Yellow; Pause; return }
     $installedApps = @(Get-ChildItem $B2P_APPS -Directory)
-    if ($installedApps.Count -eq 0) { Write-Host "Nenhum app instalado." -ForegroundColor Yellow; Pause; return }
+    if ($installedApps.Count -eq 0) { Write-Host "No installed apps." -ForegroundColor Yellow; Pause; return }
     
-    Write-Host "`nAplicativos Instalados:" -ForegroundColor Cyan
+    Write-Host "`nInstalled applications:" -ForegroundColor Cyan
     for ($i = 0; $i -lt $installedApps.Count; $i++) { " [{0,2}] {1}" -f ($i + 1), $installedApps[$i].Name }
-    Write-Host " [ Q] Voltar" -ForegroundColor Yellow
+    Write-Host " [ Q] Back" -ForegroundColor Yellow
 
-    $choice = Read-Host "`nSelecione um app"
+    $choice = Read-Host "`nSelect an app"
     $idx = 0
     if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $installedApps.Count) {
         $app = $installedApps[$idx - 1].Name
         $versions = @(Get-ChildItem (Join-Path $B2P_APPS $app) -Directory | Select-Object -ExpandProperty Name)
         
         Show-Header
-        Write-Host "Gerenciando: $app" -ForegroundColor Cyan
-        Write-Host "Versões: $($versions -join ', ')" -ForegroundColor Gray
-        Write-Host "`n [1] Upgrade" -Write-Host " [2] Set Default Version" -Write-Host " [3] Create Custom Shim"
-        Write-Host " [4] Set System PATH" -Write-Host " [5] Unset System PATH" -Write-Host " [6] Uninstall"
-        Write-Host " [Q] Voltar"
+        Write-Host "Managing: $app" -ForegroundColor Cyan
+        Write-Host "Versions: $($versions -join ', ')" -ForegroundColor Gray
+        Write-Host "`n [1] Upgrade"
+        Write-Host " [2] Set Default Version"
+        Write-Host " [3] Create Custom Shim"
+        Write-Host " [4] Set System PATH"
+        Write-Host " [5] Unset System PATH"
+        Write-Host " [6] Uninstall"
+        Write-Host " [Q] Back"
 
-        switch (Read-Host "`nOpção") {
-            "1" { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$app/up.s") }" }
+        switch (Read-Host "`nOption") {
+            "1" { Write-B2PAudit "Upgrading: $app"; Invoke-B2PRemoteScript -Uri "$RAW_W/$app/up.s" }
             "2" {
-                $verIn = Read-Host "Versão desejada"
+                $verIn = Read-Host "Desired version"
                 $verReal = Resolve-B2PVersion -App $app -Ver $verIn
-                $source = Join-Path $B2P_TELEPORTS "$app-v$verReal.bat"
-                if (-not (Test-Path $source)) { $source = Join-Path $B2P_TELEPORTS "$app-latest.bat" }
-                if (Test-Path $source) { Copy-Item $source (Join-Path $B2P_TELEPORTS "$app.bat") -Force; Write-Host "Padrão atualizado!" -ForegroundColor Green }
+                if (Set-B2PLatestLink -AppName $app -TargetVersion $verReal) {
+                    Write-B2PAudit "Set default version for $app to $verReal"
+                    Write-Host "Default version updated to $verReal!" -ForegroundColor Green
+                } else {
+                    Write-Host "Failed to set default version" -ForegroundColor Red
+                }
             }
+            "3" {
+                $shimName = Read-Host "Custom shim name (alias)"
+                if (-not (Test-ValidFileName -Name $shimName -Type "shim name")) { return }
+                
+                $binName = Read-Host "Binary name in bin folder"
+                if (-not (Test-ValidFileName -Name $binName -Type "binary name")) { return }
+                
+                $verIn = Read-Host "Version to link (or 'latest')"
+                $verReal = Resolve-B2PVersion -App $app -Ver $verIn
+                $binPath = Join-Path $B2P_APPS "$app\$verReal\$binName"
+                if (Test-Path $binPath) {
+                    $shimPath = Join-Path $B2P_SHIMS "$shimName.bat"
+                    "@echo off`nchcp 65001 > nul`n`"$binPath`" %*" | Out-File $shimPath -Encoding UTF8
+                    Write-B2PAudit "Created shim: $shimName -> $binPath"
+                    Write-Host "Shim '$shimName' created" -ForegroundColor Green
+                } else { Write-Host "Binary not found at $binPath" -ForegroundColor Red }
+            }
+            "4" { Update-B2PPath -Action "Add" -Scope "User" }
+            "5" { Update-B2PPath -Action "Remove" -Scope "User" }
             "6" { 
-                $ver = Read-Host "Versão ou 'all'"
+                $ver = Read-Host "Version or 'all'"
                 $verReal = Resolve-B2PVersion -App $app -Ver $ver
                 $localUn = Join-Path $B2P_APPS "$app\$verReal\uninstall.ps1"
+                Write-B2PAudit "Uninstalling: $app ($ver)"
                 if (Test-Path $localUn) {
-                    $tempUn = Join-Path $env:TEMP "b2p-un-$app.ps1"; Copy-Item $localUn $tempUn -Force
-                    powershell -NoProfile -ExecutionPolicy Bypass -File $tempUn -Name $app -Version $ver
+                    $tempUn = Join-Path $env:TEMP "b2p-un-$app.ps1"
+                    Copy-Item $localUn $tempUn -Force
+                    powershell -NoProfile -File $tempUn -Name $app -Version $ver
                     Remove-Item $tempUn -ErrorAction SilentlyContinue
-                } else { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$app/un.s") } -Name '$app' -Version '$ver'" }
+                } else { 
+                    Invoke-B2PRemoteScript -Uri "$RAW_W/$app/un.s"
+                }
             }
-            # ... (Demais opções implementam a mesma lógica de Resolve-B2PVersion)
         }
-        Read-Host "`nConcluído. Enter..."
+        Read-Host "`nDone. Press Enter..."
     }
 }
 
-# --- ROTEAMENTO CLI ---
+# --- CLI ROUTING ---
 if ($install) { 
     if ($install -eq "b2p") { Setup-B2P-Self } 
     else { 
         $sf = if ($s) { "-s" } else { "" }
         $url = "$RAW_W/$install/i.s"
-        iex "& { `$OriginUrl='$url'; $(Invoke-RestMethod -Uri $url) } -v '$v' $sf"
+        Write-B2PAudit "CLI install: $install"
+        try {
+            Invoke-B2PRemoteScript -Uri $url -ArgumentList "-v '$v' $sf"
+        } catch {
+            Write-Host "Installation failed: $_" -ForegroundColor Red
+            Write-B2PAudit "Installation failed: $_" "ERROR"
+        }
     }
     return 
 }
@@ -125,23 +162,78 @@ if ($install) {
 if ($uninstall) {
     $verReal = Resolve-B2PVersion -App $uninstall -Ver $v
     $localUn = Join-Path $B2P_APPS "$uninstall\$verReal\uninstall.ps1"
-    if (Test-Path $localUn) {
-        $tempUn = Join-Path $env:TEMP "b2p-un-$uninstall.ps1"; Copy-Item $localUn $tempUn -Force
-        powershell -NoProfile -ExecutionPolicy Bypass -File $tempUn -Name $uninstall -Version $v
-        Remove-Item $tempUn -ErrorAction SilentlyContinue
-    } else { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$uninstall/un.s") } -Name '$uninstall' -Version '$v'" }
+    Write-B2PAudit "CLI uninstall: $uninstall ($v)"
+    try {
+        if (Test-Path $localUn) {
+            $tempUn = Join-Path $env:TEMP "b2p-un-$uninstall.ps1"
+            Copy-Item $localUn $tempUn -Force
+            powershell -NoProfile -File $tempUn -Name $uninstall -Version $v
+            Remove-Item $tempUn -ErrorAction SilentlyContinue
+        } else {
+            Invoke-B2PRemoteScript -Uri "$RAW_W/$uninstall/un.s"
+        }
+    } catch {
+        Write-Host "Uninstall failed: $_" -ForegroundColor Red
+        Write-B2PAudit "Uninstall failed: $_" "ERROR"
+    }
     return
 }
 
-if ($upgrade) { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$upgrade/up.s") } $(if($s){'-s'})"; return }
+if ($upgrade) { 
+    Write-B2PAudit "CLI upgrade: $upgrade"
+    try {
+        Invoke-B2PRemoteScript -Uri "$RAW_W/$upgrade/up.s" -ArgumentList $(if($s){'-s'})
+    } catch {
+        Write-Host "Upgrade failed: $_" -ForegroundColor Red
+        Write-B2PAudit "Upgrade failed: $_" "ERROR"
+    }
+    return 
+}
 
-# --- MENU PRINCIPAL ---
+function Show-System-Tools {
+    Show-Header
+    Write-Host "`n[b2p] System Tools:" -ForegroundColor Cyan
+    Write-Host " [1] Doctor (verify environment)"
+    Write-Host " [2] Update b2p core"
+    Write-Host " [Q] Back"
+
+    $choice = Read-Host "`nOption"
+    switch ($choice) {
+        "1" {
+            Write-Host "`n[b2p] Running doctor..." -ForegroundColor Gray
+            foreach ($path in @($B2P_HOME, $B2P_APPS, $B2P_TELEPORTS, $B2P_SHIMS, $B2P_BIN)) {
+                if (-not (Test-Path $path)) {
+                    Write-Host "Missing $path" -ForegroundColor Yellow
+                } else {
+                    Write-Host "Found $path" -ForegroundColor Green
+                }
+            }
+            Pause
+        }
+        "2" {
+            Write-Host "`n[b2p] Updating core script..." -ForegroundColor Gray
+            try {
+                Invoke-WebRequest -Uri "$RAW_B2P/core.ps1" -OutFile (Join-Path $B2P_HOME "bin\core.ps1") -UseBasicParsing
+                Write-Host "Core updated." -ForegroundColor Green
+            } catch {
+                Write-Host "Update failed: $_" -ForegroundColor Red
+            }
+            Pause
+        }
+    }
+}
+
+# --- MAIN MENU ---
 while ($true) {
     Show-Header
-    Write-Host " [1] Explorar Apps" -Write-Host " [2] Pesquisar App" -Write-Host " [3] Gerenciar Instalados" -Write-Host " [4] Sistema (Doctor/Update)" -Write-Host " [0] Sair"
-    switch (Read-Host "`nEscolha") {
+    Write-Host " [1] Browse Apps"
+    Write-Host " [2] Search App"
+    Write-Host " [3] Manage Installed"
+    Write-Host " [4] System (Doctor/Update)"
+    Write-Host " [0] Exit"
+    switch (Read-Host "`nChoice") {
         "1" { Show-Catalog }
-        "2" { $q = Read-Host "Busca"; Show-Catalog -filter $q }
+        "2" { $q = Read-Host "Search"; Show-Catalog -filter $q }
         "3" { Manage-Installed }
         "4" { Show-System-Tools }
         "0" { exit }
