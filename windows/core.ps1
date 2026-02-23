@@ -1,5 +1,4 @@
-# core.ps1 - v1.4.0
-$B2P_CORE_VERSION = "1.4.0"
+$B2P_CORE_VERSION = "1.4.1"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
@@ -9,50 +8,68 @@ $B2P_TELEPORTS = Join-Path $B2P_HOME "teleports"
 $B2P_SHIMS = Join-Path $B2P_HOME "shims"
 $B2P_BIN = Join-Path $B2P_HOME "bin"
 
+# Garantir infraestrutura básica
 @($B2P_APPS, $B2P_TELEPORTS, $B2P_SHIMS, $B2P_BIN) | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item $_ -ItemType Directory -Force | Out-Null }
 }
 
 function Install-B2PApp {
-    param ([Object]$Manifest, [String]$Version, [Switch]$Silent, [ScriptBlock]$PreInstall, [ScriptBlock]$PostInstall)
+    param (
+        [Object]$Manifest, 
+        [String]$Slot,           # 'latest' ou versão fixa
+        [String]$OriginUrl,      # URL de onde o i.s veio (para baixar manifest/uninstall do lugar certo)
+        [Switch]$Silent, 
+        [ScriptBlock]$PreInstall, 
+        [ScriptBlock]$PostInstall
+    )
 
     $AppName = $Manifest.Name.ToLower()
-    $AppBaseDir = Join-Path $B2P_APPS $AppName
-    $InstallDir = Join-Path $AppBaseDir $Version
+    $InstallDir = Join-Path $B2P_APPS "$AppName\$Slot"
     
-    if (Test-Path $InstallDir) {
-        Write-Host "[b2p] Slot '$Version' detectado. Rodando desinstalador local antes de atualizar..." -ForegroundColor Gray
-        Uninstall-B2PApp -Name $Manifest.Name -Version $Version
+    # 1. Verificação de Atualização (Se o slot for 'latest' e já existir)
+    if ($Slot -eq "latest" -and (Test-Path $InstallDir)) {
+        $localMetaPath = Join-Path $InstallDir "b2p-metadata.json"
+        if (Test-Path $localMetaPath) {
+            $localMeta = Get-Content $localMetaPath | ConvertFrom-Json
+            if ($localMeta.RealVersion -eq $Manifest.Version) {
+                Write-Host "[b2p] Você já possui a versão mais recente ($($Manifest.Version)) no slot 'latest'." -ForegroundColor Green
+                return
+            }
+        }
+        Write-Host "[b2p] Versão nova detectada ($($Manifest.Version)). Limpando slot 'latest'..." -ForegroundColor Cyan
+        Uninstall-B2PApp -Name $Manifest.Name -Version "latest"
     }
 
     if ($PreInstall) { & $PreInstall }
 
-    # Download
+    # 2. Download e Extração
     $urlExt = [System.IO.Path]::GetExtension($Manifest.Url)
     if ([string]::IsNullOrWhiteSpace($urlExt) -or $urlExt -eq ".tmp") { $urlExt = ".zip" }
     $tempFile = Join-Path $env:TEMP "$([guid]::NewGuid().ToString())$urlExt"
     
     if (-not $Silent) {
-        Write-Host "`n[b2p] Baixando $($Manifest.Name) ($Version)..." -ForegroundColor Cyan
+        Write-Host "`n[b2p] Baixando $($Manifest.Name) ($Slot)..." -ForegroundColor Cyan
         Start-BitsTransfer -Source $Manifest.Url -Destination $tempFile -Priority Foreground
-    } else { Invoke-WebRequest -Uri $Manifest.Url -OutFile $tempFile }
+    } else { 
+        Invoke-WebRequest -Uri $Manifest.Url -OutFile $tempFile 
+    }
 
     New-Item $InstallDir -ItemType Directory -Force | Out-Null
-    Write-Host ">>> Extraindo arquivos..." -ForegroundColor Gray
+    Write-Host ">>> Extraindo para $InstallDir..." -ForegroundColor Gray
     Expand-Archive -Path $tempFile -DestinationPath $InstallDir -Force
     Remove-Item $tempFile -ErrorAction SilentlyContinue
 
-    # Limpeza de subpastas
+    # 3. Limpeza de subpastas (Flattening)
     $sub = Get-ChildItem $InstallDir -Directory | Select-Object -First 1
     if ($sub -and $sub.Name -like "*$($Manifest.Name)*") {
         Get-ChildItem $sub.FullName | Move-Item -Destination $InstallDir -Force
         Remove-Item $sub.FullName -Recurse -Force
     }
 
-    # Metadados Iniciais
+    # 4. Metadados e Exposição
     $meta = @{ 
         Name = $Manifest.Name; 
-        DisplayVersion = $Version; 
+        DisplayVersion = $Slot; 
         RealVersion = $Manifest.Version; 
         BinPath = Join-Path $InstallDir $Manifest.RelativeBinPath;
         CoreVersion = $B2P_CORE_VERSION;
@@ -60,30 +77,33 @@ function Install-B2PApp {
         Exposures = @{ Teleports = @(); Shims = @() }
     }
 
-    # Criar Teleportes e Shims
-    $meta.Exposures.Teleports = Create-B2PTeleports -Name $Manifest.Name -Version $Version -BinPath $meta.BinPath
+    # Criar Teleportes
+    $meta.Exposures.Teleports = Create-B2PTeleports -Name $Manifest.Name -Version $Slot -BinPath $meta.BinPath
+    
+    # Criar Shims do Manifesto
     if ($Manifest.Shims) {
         foreach ($s in $Manifest.Shims) {
-            $sList = Create-B2PShim -BinaryPath (Join-Path $meta.BinPath $s.bin) -Alias $s.alias -Version $Version -AppName $AppName
+            $sList = Create-B2PShim -BinaryPath (Join-Path $meta.BinPath $s.bin) -Alias $s.alias -Version $Slot -AppName $AppName
             $meta.Exposures.Shims += $sList
         }
     }
 
-    # Salva Metadados ANTES de baixar o uninstaller para que ele possa ler
+    # Salva o arquivo de metadados
     $meta | ConvertTo-Json -Depth 5 | Out-File (Join-Path $InstallDir "b2p-metadata.json") -Encoding UTF8
 
-    # BAIXAR UNINSTALLER REAL DO SERVIDOR (Copia a lógica atual do repo para o local)
-    Write-Host ">>> Sincronizando desinstalador (uninstall.ps1)..." -ForegroundColor Gray
-    $unUrl = "https://raw.githubusercontent.com/b2p-pw/windows-catalog/main/$AppName/uninstall.ps1"
+    # 5. Sincronizar o uninstall.ps1 (Busca da MESMA origem do script i.s)
+    Write-Host ">>> Sincronizando desinstalador..." -ForegroundColor Gray
+    $unSource = $OriginUrl -replace 'i.s$', 'uninstall.ps1'
     try {
-        Invoke-WebRequest -Uri $unUrl -OutFile (Join-Path $InstallDir "uninstall.ps1") -ErrorAction Stop
+        Invoke-WebRequest -Uri $unSource -OutFile (Join-Path $InstallDir "uninstall.ps1") -ErrorAction Stop
     } catch {
-        # Fallback caso o arquivo não exista no servidor
-        "@'param([String]`$Name='$AppName', [String]`$Version='$Version'); . (Join-Path `$env:USERPROFILE '.b2p\bin\core.ps1'); Uninstall-B2PApp -Name `$Name -Version `$Version '@" | Out-File (Join-Path $InstallDir "uninstall.ps1")
+        # Fallback genérico se o arquivo não existir no servidor
+        $genUn = "param(`$N='$($Manifest.Name)', `$V='$Slot'); . (Join-Path `$env:USERPROFILE '.b2p\bin\core.ps1'); Uninstall-B2PApp -Name `$N -Version `$V"
+        $genUn | Out-File (Join-Path $InstallDir "uninstall.ps1") -Encoding UTF8
     }
 
     if ($PostInstall) { & $PostInstall }
-    Write-Host "[b2p] Pronto! $($Manifest.Name) instalado." -ForegroundColor Green
+    Write-Host "[b2p] Instalado com sucesso no slot '$Slot'." -ForegroundColor Green
 }
 
 function Create-B2PTeleports {
@@ -95,9 +115,9 @@ function Create-B2PTeleports {
 
     $content = "@echo off`nchcp 65001 > nul`nset B2P_BIN=$BinPath`nif `"%~1`"==`"`" (echo $Name $Version) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
     foreach ($f in $files.Keys) {
-        $path = Join-Path $B2P_TELEPORTS $f
-        $content | Out-File $path -Encoding UTF8
-        $created += $path
+        $p = Join-Path $B2P_TELEPORTS $f
+        $content | Out-File $p -Encoding UTF8
+        $created += $p
     }
     return $created
 }
@@ -106,10 +126,10 @@ function Create-B2PShim {
     param($BinaryPath, $Alias, $Version, $AppName)
     $created = @()
     $shimName = if ($Version -eq "latest") { "$Alias.bat" } else { "$Alias-v$Version.bat" }
-    $path = Join-Path $B2P_SHIMS $shimName
+    $p = Join-Path $B2P_SHIMS $shimName
     $content = "@echo off`nchcp 65001 > nul`n`"$BinaryPath`" %*"
-    $content | Out-File $path -Encoding UTF8
-    $created += $path
+    $content | Out-File $p -Encoding UTF8
+    $created += $p
     return $created
 }
 
@@ -117,7 +137,6 @@ function Uninstall-B2PApp {
     param($Name, $Version)
     $AppName = $Name.ToLower()
     $AppRoot = Join-Path $B2P_APPS $AppName
-    
     if (Test-Path $AppRoot) { Set-Location $AppRoot }
 
     Write-Host "[b2p] Removendo $Name ($Version)..." -ForegroundColor Yellow
@@ -130,7 +149,6 @@ function Uninstall-B2PApp {
         $metaFile = Join-Path $AppRoot "$v\b2p-metadata.json"
         if (Test-Path $metaFile) {
             $meta = Get-Content $metaFile | ConvertFrom-Json
-            # Remove exatamente o que foi registrado nos metadados
             foreach ($file in $meta.Exposures.Teleports) { if (Test-Path $file) { Remove-Item $file -Force } }
             foreach ($file in $meta.Exposures.Shims) { if (Test-Path $file) { Remove-Item $file -Force } }
         }
@@ -140,7 +158,7 @@ function Uninstall-B2PApp {
 
     if ($Version -eq "all") {
         Set-Location $B2P_APPS
-        if (Test-Path $AppRoot) { Remove-Item $AppRoot -Recurse -Force -ErrorAction SilentlyContinue }
+        Remove-Item $AppRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
-    Write-Host "[b2p] Remoção concluída." -ForegroundColor Green
+    Write-Host "[b2p] Limpeza de '$Version' concluída." -ForegroundColor Green
 }
