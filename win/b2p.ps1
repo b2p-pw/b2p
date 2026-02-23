@@ -9,20 +9,27 @@ param(
     [Switch]$s = $false
 )
 
-$B2P_CLI_VERSION = "1.4.0" # <--- VERSÃO DO CLI
-
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 
-# 1. Configurações de Redirecionamento
 $RAW_B2P = "https://raw.githubusercontent.com/b2p-pw/b2p/main/win"
 $RAW_W   = "https://raw.githubusercontent.com/b2p-pw/w/main"
 $API_W   = "https://api.github.com/repos/b2p-pw/w/contents"
 
-# 2. Carregar Motor Core
 $B2P_HOME = Join-Path $env:USERPROFILE ".b2p"
 $localCore = Join-Path $B2P_HOME "bin\core.ps1"
-if (Test-Path $localCore) { . $localCore } 
-else { . { $(Invoke-RestMethod -Uri "$RAW_B2P/core.ps1") } }
+if (Test-Path $localCore) { . $localCore }
+else { . ([ScriptBlock]::Create((irm "$RAW_B2P/core.ps1"))) }
+
+function Resolve-B2PVersion {
+    param($App, $Ver)
+    if ($Ver -eq "latest") {
+        $appPath = Join-Path $B2P_APPS $App
+        if (Test-Path $appPath) {
+            return (Get-ChildItem $appPath -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+        }
+    }
+    return $Ver
+}
 
 # Garantia de variáveis globais
 if (-not $B2P_BIN) {
@@ -110,10 +117,26 @@ function Manage-Installed {
                 }
             }
             "4" {
-                $ver = Read-Host "Versão (padrão: latest)"; if ([string]::IsNullOrWhiteSpace($ver)) { $ver = "latest" }
-                $meta = Get-Content (Join-Path $B2P_APPS "$app\$ver\b2p-metadata.json") | ConvertFrom-Json
-                $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
-                if ($uPath -notlike "*$($meta.BinPath)*") { [Environment]::SetEnvironmentVariable("Path", "$uPath;$($meta.BinPath)", "User") }
+                $verInput = Read-Host "Versão (padrão: latest)"
+                if ([string]::IsNullOrWhiteSpace($verInput)) { $verInput = "latest" }
+                $verReal = Resolve-B2PVersion -App $app -Ver $verInput
+                $metaPath = Join-Path $B2P_APPS "$app\$verReal\b2p-metadata.json"
+                if (Test-Path $metaPath) {
+                    $meta = Get-Content $metaPath | ConvertFrom-Json
+                    $binToInject = $meta.BinPath
+                    $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
+                    if ($uPath.Split(';') -notcontains $binToInject) {
+                        Write-Host "Injetando no PATH Real: $binToInject" -ForegroundColor Cyan
+                        $cleanPath = $uPath.TrimEnd(';')
+                        $newPath = "$cleanPath;$binToInject"
+                        [Environment]::SetEnvironmentVariable("Path", $newPath, "User")
+                        Write-Host "Sucesso! O PATH foi atualizado." -ForegroundColor Green
+                    } else {
+                        Write-Host "O caminho já está presente no PATH Real." -ForegroundColor Yellow
+                    }
+                } else { 
+                    Write-Host "Erro: Versão '$verReal' não encontrada em $B2P_APPS\$app" -ForegroundColor Red 
+                }
             }
             "5" {
                 $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -192,8 +215,14 @@ function Setup-B2P-Self {
     if (Test-Path $b2pBat) { Set-ItemProperty $b2pBat -Name IsReadOnly -Value $false }
     Invoke-WebRequest "$RAW_B2P/core.ps1" -OutFile (Join-Path $B2P_BIN "core.ps1")
     Invoke-WebRequest "$RAW_B2P/b2p.ps1" -OutFile (Join-Path $B2P_BIN "b2p.ps1")
-    $content = "@echo off`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$B2P_BIN\b2p.ps1`" %*"
-    $content | Out-File $b2pBat -Encoding ASCII
+    $b2pBat = Join-Path $B2P_SHIMS "b2p.bat"
+    if (Test-Path $b2pBat) { Set-ItemProperty $b2pBat -Name IsReadOnly -Value $false }
+
+    # Conteúdo com CHCP para o b2p.bat
+    $content = "@echo off`nchcp 65001 > nul`npowershell -NoProfile -ExecutionPolicy Bypass -File `"$B2P_BIN\b2p.ps1`" %*"
+    
+    # Salva em UTF8
+    $content | Out-File $b2pBat -Encoding UTF8
     Set-ItemProperty $b2pBat -Name IsReadOnly -Value $true
     
     $uPath = [Environment]::GetEnvironmentVariable("Path", "User")
@@ -205,13 +234,16 @@ function Setup-B2P-Self {
 }
 
 # --- ROTEAMENTO CLI ---
-if ($install) {
-    if ($install -eq "b2p") {
-        Setup-B2P-Self
-    } else {
-        iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$install/i.s") } -v $v -s:$s"
+if ($install) { 
+    if ($install -eq "b2p") { Setup-B2P-Self } 
+    else { 
+        # Correção do Switch para string e verificação de URL
+        $silentFlag = if ($s) { "-s" } else { "" }
+        $url = "$RAW_W/$install/i.s"
+        Write-Host "Invocando: $url" -ForegroundColor Gray
+        iex "& { $(Invoke-RestMethod -Uri $url) } -v '$v' $silentFlag" 
     }
-    return
+    return 
 }
 
 if ($uninstall) { 

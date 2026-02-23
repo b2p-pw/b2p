@@ -51,13 +51,13 @@ function Install-B2PApp {
     }
     $meta | ConvertTo-Json | Out-File (Join-Path $InstallDir "b2p-metadata.json")
 
-    # --- GERADOR DE UNINSTALL LOCAL CORRIGIDO ---
-    Write-Host ">>> Gerando uninstall.ps1 local..." -ForegroundColor Gray
     $unPath = Join-Path $InstallDir "uninstall.ps1"
     $unContent = @"
 param([String]`$Name = '$AppName', [String]`$Version = '$Version')
-`$coreUrl = 'https://raw.githubusercontent.com/b2p-pw/b2p/main/win/core.ps1'
-if (Test-Path '$B2P_BIN\core.ps1') { . '$B2P_BIN\core.ps1' } else { . { `$(irm `$coreUrl) } }
+`$B2P_HOME = Join-Path `$env:USERPROFILE '.b2p'
+`$coreLocal = Join-Path `$B2P_HOME 'bin\core.ps1'
+if (Test-Path `$coreLocal) { . `$coreLocal } 
+else { . ([ScriptBlock]::Create((Invoke-RestMethod -Uri 'https://raw.githubusercontent.com/b2p-pw/b2p/main/win/core.ps1'))) }
 Uninstall-B2PApp -Name `$Name -Version `$Version
 "@
     $unContent | Out-File $unPath -Encoding UTF8
@@ -74,19 +74,27 @@ Uninstall-B2PApp -Name `$Name -Version `$Version
 
 function Create-B2PTeleports {
     param($Name, $Version, $BinPath)
+    
     $vTele = Join-Path $B2P_TELEPORTS "$Name-v$Version.bat"
     $lTele = Join-Path $B2P_TELEPORTS "$Name-latest.bat"
     $dTele = Join-Path $B2P_TELEPORTS "$Name.bat"
-    $content = "@echo off`nset B2P_BIN=$BinPath`nif `"%~1`"==`"`" (echo $Name v$Version) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
-    $content | Out-File $vTele -Encoding ASCII
-    $content | Out-File $lTele -Encoding ASCII
-    if (-not (Test-Path $dTele)) { $content | Out-File $dTele -Encoding ASCII }
+
+    # Injeção de CHCP 65001 em todos os Teleportes
+    $content = "@echo off`nchcp 65001 > nul`nset B2P_BIN=$BinPath`nif `"%~1`"==`"`" (echo $Name v$Version) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
+    
+    # Mudança para UTF8 para suportar acentos
+    $content | Out-File $vTele -Encoding UTF8
+    $content | Out-File $lTele -Encoding UTF8
+    if (-not (Test-Path $dTele)) { $content | Out-File $dTele -Encoding UTF8 }
 }
 
 function Create-B2PShim {
     param($BinaryPath, $Alias)
     $shimPath = Join-Path $B2P_SHIMS "$Alias.bat"
-    "@echo off`n`"$BinaryPath`" %*" | Out-File $shimPath -Encoding ASCII
+    
+    # Injeção de CHCP 65001 em todos os Shims
+    $content = "@echo off`nchcp 65001 > nul`n`"$BinaryPath`" %*"
+    $content | Out-File $shimPath -Encoding UTF8
 }
 
 function Uninstall-B2PApp {
