@@ -1,7 +1,7 @@
-# b2p.ps1 - v1.4.3
+# b2p.ps1 - v1.4.4
 param([String]$install, [String]$uninstall, [String]$upgrade, [String]$default, [String]$search, [String]$v = "latest", [Switch]$s = $false)
 
-$B2P_CLI_VERSION = "1.4.3"
+$B2P_CLI_VERSION = "1.4.4"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
@@ -22,7 +22,8 @@ function Resolve-B2PVersion {
     param($App, $Ver)
     $appPath = Join-Path $B2P_APPS $App
     if ($Ver -eq "latest" -and (Test-Path $appPath)) {
-        return (Get-ChildItem $appPath -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1).Name
+        $latest = Get-ChildItem $appPath -Directory | Sort-Object LastWriteTime -Descending | Select-Object -First 1
+        if ($latest) { return $latest.Name }
     }
     return $Ver
 }
@@ -51,8 +52,7 @@ function Show-Catalog {
         $idx = 0
         if ([int]::TryParse($choice, [ref]$idx) -and $idx -ge 1 -and $idx -le $apps.Count) {
             $selected = $apps[$idx - 1]
-            $url = "$RAW_W/$selected/i.s"
-            iex "& { $(Invoke-RestMethod -Uri $url) } -v latest"
+            iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$selected/i.s") } -v latest"
             Read-Host "`nPressione Enter para continuar..."
         }
     } catch { Write-Host "Erro de conexão." -ForegroundColor Red; Pause }
@@ -96,8 +96,9 @@ function Manage-Installed {
             "3" {
                 $alias = Read-Host "Nome do comando (ex: mclang)"
                 $exe = Read-Host "Executável (ex: bin\clang.exe)"
-                $verInput = Read-Host "Versão (padrão: latest)"
-                $verReal = Resolve-B2PVersion -App $app -Ver (if ($verInput) { $verInput } else { "latest" })
+                $verIn = Read-Host "Versão (padrão: latest)"
+                $vResolved = if ($verIn) { $verIn } else { "latest" }
+                $verReal = Resolve-B2PVersion -App $app -Ver $vResolved
                 $metaPath = Join-Path $B2P_APPS "$app\$verReal\b2p-metadata.json"
                 if (Test-Path $metaPath) {
                     $meta = Get-Content $metaPath | ConvertFrom-Json
@@ -107,8 +108,9 @@ function Manage-Installed {
                 }
             }
             "4" {
-                $verInput = Read-Host "Versão (padrão: latest)"
-                $verReal = Resolve-B2PVersion -App $app -Ver (if ($verInput) { $verInput } else { "latest" })
+                $verIn = Read-Host "Versão (padrão: latest)"
+                $vResolved = if ($verIn) { $verIn } else { "latest" }
+                $verReal = Resolve-B2PVersion -App $app -Ver $vResolved
                 $metaPath = Join-Path $B2P_APPS "$app\$verReal\b2p-metadata.json"
                 if (Test-Path $metaPath) {
                     $meta = Get-Content $metaPath | ConvertFrom-Json
@@ -126,7 +128,7 @@ function Manage-Installed {
                 Write-Host "PATH Real limpo." -ForegroundColor Yellow
             }
             "6" { 
-                $ver = Read-Host "Versão ou 'all'"; 
+                $ver = Read-Host "Versão ou 'all'"
                 $verReal = Resolve-B2PVersion -App $app -Ver $ver
                 $localUn = Join-Path $B2P_APPS "$app\$verReal\uninstall.ps1"
                 if (Test-Path $localUn) {
@@ -187,13 +189,9 @@ function Setup-B2P-Self {
     Write-Host "Finalizado! Reinicie o terminal." -ForegroundColor Green; Pause
 }
 
-# ROTEAMENTO CLI
 if ($install) { 
     if ($install -eq "b2p") { Setup-B2P-Self } 
-    else { 
-        $sf = if ($s) { "-s" } else { "" }
-        iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$install/i.s") } -v '$v' $sf"
-    }
+    else { iex "& { $(Invoke-RestMethod -Uri "$RAW_W/$install/i.s") } -v '$v' $(if ($s){'-s'})" }
     return 
 }
 if ($uninstall) {
