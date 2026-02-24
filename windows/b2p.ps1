@@ -143,6 +143,24 @@ function Manage-Installed {
 }
 
 # --- CLI ROUTING ---
+function Setup-B2P-Self {
+    # install or update the CLI itself (b2p.ps1 + core.ps1)
+    Write-B2PAudit "Self-install invoked"
+    Write-Host "[b2p] Installing/updating b2p CLI and core..." -ForegroundColor Cyan
+    try {
+        if (-not (Test-Path $B2P_BIN)) { New-Item -Path $B2P_BIN -ItemType Directory -Force | Out-Null }
+        $cliDest  = Join-Path $B2P_BIN "b2p.ps1"
+        $coreDest = Join-Path $B2P_BIN "core.ps1"
+        Invoke-WebRequest -Uri "$RAW_B2P/b2p.ps1"  -OutFile $cliDest  -UseBasicParsing -ErrorAction Stop
+        Invoke-WebRequest -Uri "$RAW_B2P/core.ps1" -OutFile $coreDest -UseBasicParsing -ErrorAction Stop
+        Write-B2PAudit "Self-install successful"
+        Write-Host "[b2p] CLI updated. Restart your shell or rerun the command to pick up changes." -ForegroundColor Green
+    } catch {
+        Write-B2PAudit "Self-install failed: $_" "ERROR"
+        Write-Host "[b2p] Self-install failed: $_" -ForegroundColor Red
+    }
+}
+
 if ($install) { 
     if ($install -eq "b2p") { Setup-B2P-Self } 
     else { 
@@ -180,6 +198,11 @@ if ($uninstall) {
 }
 
 if ($upgrade) { 
+    if ($upgrade -eq "b2p") { 
+        Setup-B2P-Self
+        return
+    }
+
     Write-B2PAudit "CLI upgrade: $upgrade"
     try {
         Invoke-B2PRemoteScript -Uri "$RAW_W/$upgrade/up.s" -ArgumentList $(if($s){'-s'})
