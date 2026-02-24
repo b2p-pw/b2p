@@ -121,6 +121,13 @@ function Set-B2PLatestLink {
     $latestLink = Join-Path $appRoot "latest"
     $targetPath = Join-Path $appRoot $TargetVersion
     
+    # nothing to do when asked to link "latest" to itself; the caller should
+    # install into that path directly and there is no separate versioned folder
+    if ($TargetVersion -eq 'latest') {
+        Write-Host "[b2p] Skipping symlink: target version is 'latest'" -ForegroundColor Gray
+        return $true
+    }
+
     if (-not (Test-Path $targetPath)) {
         Write-Host "[b2p] Version $TargetVersion not found" -ForegroundColor Red
         return $false
