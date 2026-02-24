@@ -1,4 +1,13 @@
-param([String]$install, [String]$uninstall, [String]$upgrade, [String]$default, [String]$search, [String]$v = "latest", [Switch]$s = $false)
+param(
+    [String]$install,
+    [String]$uninstall,
+    [String]$upgrade,
+    [String]$default,
+    [String]$search,
+    [String]$v = "latest",
+    [Switch]$s = $false,
+    [Switch]$version           # show CLI/core version information
+)
 
 $B2P_CLI_VERSION = "1.5.0"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
@@ -143,6 +152,14 @@ function Manage-Installed {
 }
 
 # --- CLI ROUTING ---
+
+# version switch is evaluated first because it's a no-op that just prints info
+if ($version) {
+    Write-Host "b2p CLI version $B2P_CLI_VERSION" -ForegroundColor Cyan
+    if ($B2P_CORE_VERSION) { Write-Host "b2p core version $B2P_CORE_VERSION" -ForegroundColor Cyan }
+    return
+}
+
 function Setup-B2P-Self {
     # install or update the CLI itself (b2p.ps1 + core.ps1)
     Write-B2PAudit "Self-install invoked"

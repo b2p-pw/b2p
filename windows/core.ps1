@@ -31,7 +31,20 @@ function Validate-B2PHash {
     
     if (-not (Test-Path $B2P_HASHES)) { New-Item $B2P_HASHES -ItemType Directory -Force | Out-Null }
     
-    $contentHash = (Get-FileHash -InputStream ([System.IO.MemoryStream]::new([System.Text.Encoding]::UTF8.GetBytes($Content))) -Algorithm SHA256).Hash
+    # compute SHA256 either with Get-FileHash or a .NET fallback when the cmdlet
+    # isn't available (some environments disable module autoloading)
+    if (-not (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
+        Import-Module Microsoft.PowerShell.Utility -ErrorAction SilentlyContinue
+    }
+    if (Get-Command Get-FileHash -ErrorAction SilentlyContinue) {
+        $contentHash = (Get-FileHash -InputStream ([System.IO.MemoryStream]::new([System.Text.Encoding]::UTF8.GetBytes($Content))) -Algorithm SHA256).Hash
+    } else {
+        # manual hashing with .NET
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($Content)
+        $hashBytes = $sha.ComputeHash($bytes)
+        $contentHash = ($hashBytes | ForEach-Object { $_.ToString('x2') }) -join ''
+    }
     
     if (Test-Path $hashFile) {
         $storedHash = Get-Content $hashFile
