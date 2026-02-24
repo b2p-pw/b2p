@@ -198,8 +198,22 @@ function Install-B2PApp {
     }
 
     New-Item $InstallDir -ItemType Directory -Force | Out-Null
-    Write-Host ">>> Extracting to $InstallDir..." -ForegroundColor Gray
-    Expand-Archive -Path $tempFile -DestinationPath $InstallDir -Force
+    Write-Host ">>> Installing to $InstallDir..." -ForegroundColor Gray
+    # if the downloaded file isn't a zip archive, just move it instead of extracting
+    switch ($urlExt.ToLower()) {
+        '.zip' {
+            Expand-Archive -Path $tempFile -DestinationPath $InstallDir -Force
+        }
+        default {
+            # determine a reasonable filename: prefer the name in the URL, fall
+            # back to the temp file name if that's unavailable
+            $filename = [System.IO.Path]::GetFileName($Manifest.Url)
+            if ([string]::IsNullOrEmpty($filename)) { $filename = Split-Path $tempFile -Leaf }
+            $dest = Join-Path $InstallDir $filename
+            Move-Item -Path $tempFile -Destination $dest -Force
+        }
+    }
+    # temp file may already have been moved above; ignore errors
     Remove-Item $tempFile -ErrorAction SilentlyContinue
 
     # 3. Subfolder cleanup (flattening)
@@ -272,10 +286,8 @@ function Create-B2PTeleports {
     
     return $created
 }
-}
 
-function Create-B2PShim {
-    param($BinaryPath, $Alias, $Version, $AppName)
+function Create-B2PShim {    param($BinaryPath, $Alias, $Version, $AppName)
     $created = @()
     
     # Create versioned shim (always)
