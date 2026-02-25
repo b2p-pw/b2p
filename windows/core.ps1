@@ -8,15 +8,16 @@ $B2P_TELEPORTS = Join-Path $B2P_HOME "teleports"
 $B2P_SHIMS = Join-Path $B2P_HOME "shims"
 $B2P_BIN = Join-Path $B2P_HOME "bin"
 
-# Ensure basic infrastructure
+# Hashes are stored per core release so that changes to the
+# hashing/validation logic don’t conflict with previously saved values.
+$B2P_HASHES = Join-Path $B2P_HOME "hashes\$B2P_CORE_VERSION"
+
+# Ensure basic infrastructure (note that $B2P_HASHES must exist first)
 @($B2P_APPS, $B2P_TELEPORTS, $B2P_SHIMS, $B2P_BIN, $B2P_HASHES) | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item $_ -ItemType Directory -Force | Out-Null }
 }
 
 $B2P_AUDIT_LOG = Join-Path $B2P_HOME "audit.log"
-# Hashes are stored per core release so that changes to the
-# hashing/validation logic don’t conflict with previously saved values.
-$B2P_HASHES = Join-Path $B2P_HOME "hashes\$B2P_CORE_VERSION"
 
 # --- SECURITY & HELPER FUNCTIONS ---
 function Write-B2PAudit {
