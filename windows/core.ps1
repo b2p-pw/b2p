@@ -108,25 +108,25 @@ function Set-B2PLatestLink {
     }
     
     try {
-        # Remove old symlink if exists
+        # Remove old junction/symlink if exists
         if (Test-Path $latestLink) {
             $linkInfo = Get-Item $latestLink -Force
-            if ($linkInfo.LinkType -eq "SymbolicLink") {
+            if ($linkInfo.LinkType -eq "SymbolicLink" -or $linkInfo.LinkType -eq "Junction") {
                 Remove-Item $latestLink -Force
             } elseif ($linkInfo -is [System.IO.DirectoryInfo]) {
-                Write-Host "[b2p] Warning: '$latestLink' exists but is not a symlink. Removing..." -ForegroundColor Yellow
+                Write-Host "[b2p] Warning: '$latestLink' exists but is not a link. Removing..." -ForegroundColor Yellow
                 Remove-Item $latestLink -Recurse -Force
             }
         }
         
-        # Create new symlink
-        $null = New-Item -ItemType SymbolicLink -Path $latestLink -Target $targetPath -Force
+        # Create new junction (no admin required)
+        cmd /c mklink /J $latestLink $targetPath | Out-Null
         Write-B2PAudit "Latest link updated for $AppName -> $TargetVersion"
         Write-Host "[b2p] Latest link updated: $AppName -> $TargetVersion" -ForegroundColor Green
         return $true
     } catch {
         Write-B2PAudit "Failed to set latest link: $_" "ERROR"
-        Write-Host "[b2p] Error creating symlink: $_" -ForegroundColor Red
+        Write-Host "[b2p] Error creating junction: $_" -ForegroundColor Red
         return $false
     }
 }
