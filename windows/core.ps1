@@ -1,4 +1,4 @@
-$B2P_CORE_VERSION = "1.4.1"
+$B2P_CORE_VERSION = "1.5.1"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
@@ -26,8 +26,8 @@ function Write-B2PAudit {
 }
 
 function Validate-B2PHash {
-    param([String]$Url, [String]$Content)
-    $hashFile = Join-Path $B2P_HASHES (([System.Uri]$Url).Segments[-1] + ".sha256")
+    param([String]$Url, [String]$Content, [String]$AppName, [String]$TargetVersion)
+    $hashFile = Join-Path $B2P_HASHES\$AppName\$TargetVersion (([System.Uri]$Url).Segments[-1] + ".sha256")
     
     if (-not (Test-Path $B2P_HASHES)) { New-Item $B2P_HASHES -ItemType Directory -Force | Out-Null }
     
@@ -289,7 +289,7 @@ function Create-B2PTeleports {
     
     # Versioned teleport uses actual BinPath
     $teleName = if ($Version -eq "latest") { "$Name-latest.bat" } else { "$Name-v$Version.bat" }
-    $content = "@echo off`nchcp 65001 > nul`nset B2P_BIN=$BinPath`nif `"%~1`"==`"`" (echo $Name $Version) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
+    $content = "@set B2P_BIN=$BinPath`n@if `"%~1`"==`"`" (echo $Name $Version) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
     
     $p = Join-Path $B2P_TELEPORTS $teleName
     $content | Out-File $p -Encoding UTF8
@@ -298,7 +298,7 @@ function Create-B2PTeleports {
     # Generic teleport points to 'latest' symlink if this is first setup
     if (-not (Test-Path (Join-Path $B2P_TELEPORTS "$Name.bat"))) {
         $genericBinPath = Join-Path $B2P_APPS "$AppName\latest\bin"
-        $genericContent = "@echo off`nchcp 65001 > nul`nset B2P_BIN=$genericBinPath`nif `"%~1`"==`"`" (echo $Name latest) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
+        $genericContent = "@set B2P_BIN=$genericBinPath`n@if `"%~1`"==`"`" (echo $Name latest) else ( `"%B2P_BIN%\%~1`" %~2 %~3 %~4 %~5 %~6 )"
         $gp = Join-Path $B2P_TELEPORTS "$Name.bat"
         $genericContent | Out-File $gp -Encoding UTF8
         $created += $gp
@@ -313,7 +313,7 @@ function Create-B2PShim {    param($BinaryPath, $Alias, $Version, $AppName)
     # Create versioned shim (always)
     $shimName = if ($Version -eq "latest") { "$Alias.bat" } else { "$Alias-v$Version.bat" }
     $p = Join-Path $B2P_SHIMS $shimName
-    $content = "@echo off`nchcp 65001 > nul`n`"$BinaryPath`" %*"
+    $content = "@`n`"$BinaryPath`" %*"
     $content | Out-File $p -Encoding UTF8
     $created += $p
     
@@ -321,7 +321,7 @@ function Create-B2PShim {    param($BinaryPath, $Alias, $Version, $AppName)
     if ($Version -ne "latest" -and -not (Test-Path (Join-Path $B2P_SHIMS "$Alias.bat"))) {
         $genericPath = Join-Path $B2P_SHIMS "$Alias.bat"
         $latestBinPath = Join-Path $B2P_APPS "$AppName\latest\bin\$(Split-Path $BinaryPath -Leaf)"
-        $genericContent = "@echo off`nchcp 65001 > nul`n`"$latestBinPath`" %*"
+        $genericContent = "@`"$latestBinPath`" %*"
         $genericContent | Out-File $genericPath -Encoding UTF8
         $created += $genericPath
     }

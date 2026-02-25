@@ -9,7 +9,7 @@ param(
     [Switch]$version           # show CLI/core version information
 )
 
-$B2P_CLI_VERSION = "1.5.0"
+$B2P_CLI_VERSION = "1.5.1"
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = "Stop"
 
@@ -125,7 +125,7 @@ function Manage-Installed {
                 $binPath = Join-Path $B2P_APPS "$app\$verReal\$binName"
                 if (Test-Path $binPath) {
                     $shimPath = Join-Path $B2P_SHIMS "$shimName.bat"
-                    "@echo off`nchcp 65001 > nul`n`"$binPath`" %*" | Out-File $shimPath -Encoding UTF8
+                    "@`"$binPath`" %*" | Out-File $shimPath -Encoding UTF8
                     Write-B2PAudit "Created shim: $shimName -> $binPath"
                     Write-Host "Shim '$shimName' created" -ForegroundColor Green
                 } else { Write-Host "Binary not found at $binPath" -ForegroundColor Red }
