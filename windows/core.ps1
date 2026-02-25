@@ -93,16 +93,27 @@ function Invoke-B2PRemoteScript {
         [String]$Uri,
         [String]$ArgumentList = "",
         [String]$AppName = "",         # optional context for the caller
-        [String]$TargetVersion = ""    # optional slot/version for the caller
+        [String]$TargetVersion = ""    # optional; script version if URL has /v/<version>/, else app version
     )
     Write-B2PAudit "Executing remote script: $Uri"
+    
+    # if the URI contains /v/<version>/, extract it as the script version
+    # this takes precedence: scripts under explicit versioning are hashed by script version
+    $scriptVersionFromUrl = ""
+    if ($Uri -match '/v/([^/]+)/') {
+        $scriptVersionFromUrl = $matches[1]
+    }
+    
     try {
         $script = Invoke-RestMethod -Uri $Uri -ErrorAction Stop
+        # use script version if we extracted it; otherwise use what was passed (e.g. app version)
+        $effectiveVersion = if ($scriptVersionFromUrl) { $scriptVersionFromUrl } else { $TargetVersion }
+        
         # when app/target info is available, provide it so hashes end up under
         # the appropriate application folder rather than just the core version.
         $hashParams = @{ Url = $Uri; Content = $script }
         if ($AppName) { $hashParams.AppName = $AppName }
-        if ($TargetVersion) { $hashParams.TargetVersion = $TargetVersion }
+        if ($effectiveVersion) { $hashParams.TargetVersion = $effectiveVersion }
 
         if (-not (Validate-B2PHash @hashParams)) {
             throw "Script validation failed"
