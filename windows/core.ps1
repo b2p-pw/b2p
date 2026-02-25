@@ -9,12 +9,14 @@ $B2P_SHIMS = Join-Path $B2P_HOME "shims"
 $B2P_BIN = Join-Path $B2P_HOME "bin"
 
 # Ensure basic infrastructure
-@($B2P_APPS, $B2P_TELEPORTS, $B2P_SHIMS, $B2P_BIN) | ForEach-Object {
+@($B2P_APPS, $B2P_TELEPORTS, $B2P_SHIMS, $B2P_BIN, $B2P_HASHES) | ForEach-Object {
     if (-not (Test-Path $_)) { New-Item $_ -ItemType Directory -Force | Out-Null }
 }
 
 $B2P_AUDIT_LOG = Join-Path $B2P_HOME "audit.log"
-$B2P_HASHES = Join-Path $B2P_HOME "hashes"
+# Hashes are stored per core release so that changes to the
+# hashing/validation logic don’t conflict with previously saved values.
+$B2P_HASHES = Join-Path $B2P_HOME "hashes\$B2P_CORE_VERSION"
 
 # --- SECURITY & HELPER FUNCTIONS ---
 function Write-B2PAudit {
@@ -26,11 +28,29 @@ function Write-B2PAudit {
 }
 
 function Validate-B2PHash {
-    param([String]$Url, [String]$Content, [String]$AppName, [String]$TargetVersion)
-    $hashFile = Join-Path $B2P_HASHES\$AppName\$TargetVersion (([System.Uri]$Url).Segments[-1] + ".sha256")
-    
-    if (-not (Test-Path $B2P_HASHES)) { New-Item $B2P_HASHES -ItemType Directory -Force | Out-Null }
-    
+    param(
+        [String]$Url,
+        [String]$Content,
+        [String]$AppName = "",            # optional, allows further partitioning of the hash store
+        [String]$TargetVersion = ""       # also optional; can be "latest" or a real version
+    )
+
+    # Determine where to keep the hash.  When the caller provides both an
+    # application name and a version/slot we create a subfolder under the
+    # core-versioned root.  This keeps different app/version combinations
+    # separate and avoids collisions when a slot like "latest" is reused.
+    # If either argument is empty the hash is stored directly in the root
+    # directory (the behaviour of the original script prior to this change).
+    if ($AppName -and $TargetVersion) {
+        $hashDir = Join-Path $B2P_HASHES $AppName $TargetVersion
+    } else {
+        $hashDir = $B2P_HASHES
+    }
+
+    if (-not (Test-Path $hashDir)) { New-Item -ItemType Directory -Path $hashDir -Force | Out-Null }
+
+    $hashFile = Join-Path $hashDir (([System.Uri]$Url).Segments[-1] + ".sha256")
+
     # compute SHA256 either with Get-FileHash or a .NET fallback when the cmdlet
     # isn't available (some environments disable module autoloading)
     if (-not (Get-Command Get-FileHash -ErrorAction SilentlyContinue)) {
@@ -65,6 +85,12 @@ function Invoke-B2PRemoteScript {
     Write-B2PAudit "Executing remote script: $Uri"
     try {
         $script = Invoke-RestMethod -Uri $Uri -ErrorAction Stop
+        # At this point we don't know which app/version the script belongs to, so
+        # we call Validate-B2PHash without supplying the optional AppName/TargetVersion
+        # arguments.  The function will therefore store the checksum in the root
+        # folder (versioned by core only).  Callers that do know the app/version
+        # can pass those values to get a more granular path (e.g. hashes\foo\1.2.3
+        # or hashes\foo\latest).
         if (-not (Validate-B2PHash -Url $Uri -Content $script)) {
             throw "Script validation failed"
         }
