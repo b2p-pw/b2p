@@ -8,9 +8,12 @@ $B2P_TELEPORTS = Join-Path $B2P_HOME "teleports"
 $B2P_SHIMS = Join-Path $B2P_HOME "shims"
 $B2P_BIN = Join-Path $B2P_HOME "bin"
 
-# Hashes are stored per core release so that changes to the
-# hashing/validation logic don’t conflict with previously saved values.
-$B2P_HASHES = Join-Path $B2P_HOME "hashes\$B2P_CORE_VERSION"
+# Base directory for all stored checksums.  We used to version the root
+# itself by the core release, but that placed the version ahead of the
+# application name in the path (e.g. hashes\1.5.1).  callers expect hashes to
+# be grouped by app first, so the core version is now in the subdirectory when
+# no application is specified.
+$B2P_HASHES = Join-Path $B2P_HOME "hashes"
 
 # Ensure basic infrastructure (note that $B2P_HASHES must exist first)
 @($B2P_APPS, $B2P_TELEPORTS, $B2P_SHIMS, $B2P_BIN, $B2P_HASHES) | ForEach-Object {
@@ -36,16 +39,20 @@ function Validate-B2PHash {
         [String]$TargetVersion = ""       # also optional; can be "latest" or a real version
     )
 
-    # Determine where to keep the hash.  When the caller provides both an
-    # application name and a version/slot we create a subfolder under the
-    # core-versioned root.  This keeps different app/version combinations
-    # separate and avoids collisions when a slot like "latest" is reused.
-    # If either argument is empty the hash is stored directly in the root
-    # directory (the behaviour of the original script prior to this change).
-    if ($AppName -and $TargetVersion) {
-        $hashDir = Join-Path $B2P_HASHES $AppName $TargetVersion
+    # Figure out the directory to use for this hash.  Our goal is always to
+    # have the application name (if supplied) come first in the path, with the
+    # core version pushed further down.  The old implementation put the core
+    # version at the root which made every entry look like a "version" instead
+    # of belonging to an app.
+    if ($AppName) {
+        # start with the app folder
+        $hashDir = Join-Path $B2P_HASHES $AppName
+        # add target/version if given (e.g. slot or explicit version)
+        if ($TargetVersion) { $hashDir = Join-Path $hashDir $TargetVersion }
     } else {
-        $hashDir = $B2P_HASHES
+        # unknown app: fall back to a folder named after the core release so
+        # that updates of b2p still use separate stores
+        $hashDir = Join-Path $B2P_HASHES $B2P_CORE_VERSION
     }
 
     if (-not (Test-Path $hashDir)) { New-Item -ItemType Directory -Path $hashDir -Force | Out-Null }
@@ -82,17 +89,22 @@ function Validate-B2PHash {
 }
 
 function Invoke-B2PRemoteScript {
-    param([String]$Uri, [String]$ArgumentList = "")
+    param(
+        [String]$Uri,
+        [String]$ArgumentList = "",
+        [String]$AppName = "",         # optional context for the caller
+        [String]$TargetVersion = ""    # optional slot/version for the caller
+    )
     Write-B2PAudit "Executing remote script: $Uri"
     try {
         $script = Invoke-RestMethod -Uri $Uri -ErrorAction Stop
-        # At this point we don't know which app/version the script belongs to, so
-        # we call Validate-B2PHash without supplying the optional AppName/TargetVersion
-        # arguments.  The function will therefore store the checksum in the root
-        # folder (versioned by core only).  Callers that do know the app/version
-        # can pass those values to get a more granular path (e.g. hashes\foo\1.2.3
-        # or hashes\foo\latest).
-        if (-not (Validate-B2PHash -Url $Uri -Content $script)) {
+        # when app/target info is available, provide it so hashes end up under
+        # the appropriate application folder rather than just the core version.
+        $hashParams = @{ Url = $Uri; Content = $script }
+        if ($AppName) { $hashParams.AppName = $AppName }
+        if ($TargetVersion) { $hashParams.TargetVersion = $TargetVersion }
+
+        if (-not (Validate-B2PHash @hashParams)) {
             throw "Script validation failed"
         }
         iex "& { $script } $ArgumentList"
