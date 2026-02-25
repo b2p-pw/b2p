@@ -68,7 +68,8 @@ function Show-Catalog {
             $selected = $apps[$idx - 1]
             $url = "$RAW_W/$selected/i.s"
             Write-B2PAudit "Installing app from: $url"
-            Invoke-B2PRemoteScript -Uri $url -ArgumentList "-v latest"
+            # version is resolved by the remote install script; pass only the app
+            Invoke-B2PRemoteScript -Uri $url -ArgumentList "-v latest" -AppName $selected -TargetVersion latest
             Read-Host "`nProcess finished. Press Enter..."
         }
     } catch { Write-Host "Connection error." -ForegroundColor Red; Pause }
@@ -102,7 +103,14 @@ function Manage-Installed {
         Write-Host " [Q] Back"
 
         switch (Read-Host "`nOption") {
-            "1" { Write-B2PAudit "Upgrading: $app"; Invoke-B2PRemoteScript -Uri "$RAW_W/$app/up.s" }
+            "1" {
+                Write-B2PAudit "Upgrading: $app"
+                # pick the currently installed version as a starting point for the
+                # hash path; the relocation logic in Invoke-B2PRemoteScript will
+                # move things again once the new release is known.
+                $currentVer = Resolve-B2PVersion -App $app -Ver 'latest'
+                Invoke-B2PRemoteScript -Uri "$RAW_W/$app/up.s" -AppName $app -TargetVersion $currentVer
+            }
             "2" {
                 $verIn = Read-Host "Desired version"
                 $verReal = Resolve-B2PVersion -App $app -Ver $verIn
@@ -140,10 +148,10 @@ function Manage-Installed {
                 if (Test-Path $localUn) {
                     $tempUn = Join-Path $env:TEMP "b2p-un-$app.ps1"
                     Copy-Item $localUn $tempUn -Force
-                    powershell -NoProfile -File $tempUn -Name $app -Version $ver
+                    powershell -NoProfile -File $tempUn -Name $app -Version $verReal
                     Remove-Item $tempUn -ErrorAction SilentlyContinue
                 } else { 
-                    Invoke-B2PRemoteScript -Uri "$RAW_W/$app/un.s"
+                    Invoke-B2PRemoteScript -Uri "$RAW_W/$app/un.s" -AppName $app -TargetVersion $verReal
                 }
             }
         }
@@ -185,7 +193,7 @@ if ($install) {
         $url = "$RAW_W/$install/i.s"
         Write-B2PAudit "CLI install: $install"
         try {
-            Invoke-B2PRemoteScript -Uri $url -ArgumentList "-v '$v' $sf"
+            Invoke-B2PRemoteScript -Uri $url -ArgumentList "-v $v $sf" -AppName $install -TargetVersion $v
         } catch {
             Write-Host "Installation failed: $_" -ForegroundColor Red
             Write-B2PAudit "Installation failed: $_" "ERROR"
@@ -202,10 +210,10 @@ if ($uninstall) {
         if (Test-Path $localUn) {
             $tempUn = Join-Path $env:TEMP "b2p-un-$uninstall.ps1"
             Copy-Item $localUn $tempUn -Force
-            powershell -NoProfile -File $tempUn -Name $uninstall -Version $v
+            powershell -NoProfile -File $tempUn -Name $uninstall -Version $verReal
             Remove-Item $tempUn -ErrorAction SilentlyContinue
         } else {
-            Invoke-B2PRemoteScript -Uri "$RAW_W/$uninstall/un.s"
+            Invoke-B2PRemoteScript -Uri "$RAW_W/$uninstall/un.s" -AppName $uninstall -TargetVersion $verReal
         }
     } catch {
         Write-Host "Uninstall failed: $_" -ForegroundColor Red
@@ -222,7 +230,12 @@ if ($upgrade) {
 
     Write-B2PAudit "CLI upgrade: $upgrade"
     try {
-        Invoke-B2PRemoteScript -Uri "$RAW_W/$upgrade/up.s" -ArgumentList $(if($s){'-s'})
+        # for an upgrade we don't yet know the version that will be installed,
+        # but we can at least use the currently installed release (if any) to
+        # seed the hash path; the post‑execution rebasing logic above will move
+        # the hashes again when the new version appears in metadata.
+        $current = Resolve-B2PVersion -App $upgrade -Ver 'latest'
+        Invoke-B2PRemoteScript -Uri "$RAW_W/$upgrade/up.s" -ArgumentList $(if($s){'-s'}) -AppName $upgrade -TargetVersion $current
     } catch {
         Write-Host "Upgrade failed: $_" -ForegroundColor Red
         Write-B2PAudit "Upgrade failed: $_" "ERROR"

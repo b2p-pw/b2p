@@ -111,6 +111,33 @@ function Invoke-B2PRemoteScript {
     } catch {
         Write-B2PAudit "Failed to execute remote script: $_" "ERROR"
         throw $_
+    } finally {
+        # if we attempted to categorize the hash under a slot of 'latest', the
+        # real version may now be known (e.g. an install/upgrade just happened).
+        # relocate the directory so checksums live under the actual release
+        # instead of forever sitting at "latest".
+        if ($AppName -and $TargetVersion -eq 'latest') {
+            $metaPath = Join-Path $B2P_APPS $AppName 'latest\b2p-metadata.json'
+            if (Test-Path $metaPath) {
+                try {
+                    $meta = Get-Content $metaPath | ConvertFrom-Json
+                    $real = $meta.RealVersion
+                    if ($real -and $real -ne 'latest') {
+                        $oldDir = Join-Path $B2P_HASHES $AppName 'latest'
+                        $newDir = Join-Path $B2P_HASHES $AppName $real
+                        if (Test-Path $oldDir) {
+                            # ensure parent exists
+                            $parent = Split-Path $newDir
+                            if (-not (Test-Path $parent)) { New-Item -Path $parent -ItemType Directory -Force | Out-Null }
+                            Move-Item -Path $oldDir -Destination $newDir -Force
+                            Write-B2PAudit "Rebased hash store for $AppName from 'latest' to '$real'"
+                        }
+                    }
+                } catch {
+                    Write-B2PAudit "Error rebasing hash store: $_" "ERROR"
+                }
+            }
+        }
     }
 }
 
