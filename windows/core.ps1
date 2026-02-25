@@ -35,7 +35,6 @@ function Invoke-B2PRemoteScript {
         throw $_
     }
 }
-}
 
 function Test-ValidFileName {
     param([String]$Name, [String]$Type = "filename")
